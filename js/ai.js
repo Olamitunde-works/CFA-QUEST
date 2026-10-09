@@ -171,6 +171,86 @@ async function extractNotes({ files, topic, title, log, signal }) {
   return notes;
 }
 
+// ---------- slides: faithful, word-for-word transcription ----------
+const SLIDES_SYSTEM = `You transcribe screenshots of a CFA Level I curriculum reading into presentation slides, WORD FOR WORD.
+This is a transcription job, not a summary. The learner wants to read the curriculum itself, just cut into small screens.
+Rules:
+- Copy the text EXACTLY as written: same words, same order, same numbers, same terms. Do not paraphrase, shorten, simplify, merge, reorder, or add anything. Fix only obvious screenshot glitches.
+- Mark bold or defined terms from the source with **double asterisks**.
+- Cut at natural boundaries: one idea, one paragraph, one list, one worked-example step, one table or one figure per slide. If a paragraph is long, split it between sentences. Aim for 25-70 words per slide; never above 90.
+- Keep every sentence. Nothing may be dropped, including caveats, exceptions, footnotes that carry content, and every worked example with all its numbers and steps.
+- Skip only page chrome: navigation bars, page numbers, copyright lines, "Learning Module" banners repeated on each page, and buttons.
+- Formulas: put the formula in "formula" (plain text, using × ÷ − √ ^ and subscripts like WACC, r_d, w_e) and put the words around it in "text" on the same slide.
+- Tables: use kind "table" with "columns" and "rows" copied exactly (max 8 rows per slide; if longer, continue on the next slide repeating the columns, and say so in "heading").
+- Diagrams, charts, graphs and pictures: kind "exhibit". Give the page number (1-based within these screenshots), a tight crop box "bbox" [x0,y0,x1,y1] as fractions 0-1 of the page image that contains the whole figure plus its title, "caption" (the figure title/number/source exactly as written) and "text" (every label or number inside the figure, exactly).
+- Every slide gets "heading": the nearest section heading from the reading (use the reading's own wording), and "losId": the id of the Learning Outcome Statement it mainly supports (use the ids from the LOS list; empty string if it is the intro or the LOS list itself).
+- The LOS page: one slide of kind "list" with the LOS verbatim (one per line, "- a) text"), and also return them in "los" as [{"id":"a","text":"exact LOS text"}]. If the LOS carry no letters, assign a, b, c… in order.
+Return ONLY JSON.`;
+
+const SLIDE_SCHEMA = `{"los":[{"id":"a","text":""}]  (only when the LOS appear in these pages, else []),
+ "slides":[{"kind":"text|definition|example|formula|table|exhibit|list","heading":"","losId":"","text":"verbatim, paragraphs separated by a blank line, bullets as lines starting with '- '","formula":"","columns":[],"rows":[[]],"page":1,"bbox":[0,0,1,1],"caption":""}]}
+Use only the fields a slide needs.`;
+
+function loadImg(url) {
+  return new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = url; });
+}
+async function cropJpeg(b64, bbox, maxW = 1200) {
+  try {
+    const im = await loadImg(`data:image/jpeg;base64,${b64}`);
+    let [x0, y0, x1, y1] = Array.isArray(bbox) && bbox.length === 4 ? bbox.map(Number) : [0, 0, 1, 1];
+    const ok = [x0, y0, x1, y1].every((n) => Number.isFinite(n)) && x1 > x0 && y1 > y0 && (x1 - x0) * (y1 - y0) > 0.04;
+    if (!ok) [x0, y0, x1, y1] = [0, 0, 1, 1];
+    const pad = 0.015;
+    x0 = Math.max(0, x0 - pad); y0 = Math.max(0, y0 - pad); x1 = Math.min(1, x1 + pad); y1 = Math.min(1, y1 + pad);
+    const sw = (x1 - x0) * im.width, sh = (y1 - y0) * im.height;
+    const k = Math.min(1, maxW / sw);
+    const c = document.createElement('canvas');
+    c.width = Math.round(sw * k); c.height = Math.round(sh * k);
+    c.getContext('2d').drawImage(im, x0 * im.width, y0 * im.height, sw, sh, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.82);
+  } catch { return null; }
+}
+
+export async function buildSlides({ files, topic, title, log, signal }) {
+  const slides = [];
+  let los = [];
+  const per = 2;
+  for (let i = 0; i < files.length; i += per) {
+    const batch = files.slice(i, i + per);
+    log(`Transcribing pages ${i + 1}–${i + batch.length} of ${files.length}…`);
+    const b64s = [];
+    for (const f of batch) b64s.push(await fileToJpegBase64(f));
+    const imgs = b64s.map((d) => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: d } }));
+    const prev = slides.slice(-2).map((s) => `[${s.heading || ''}] ${(s.text || s.caption || '').slice(-220)}`).join('\n');
+    const out = await callJSON({
+      system: SLIDES_SYSTEM, maxTokens: 10000, signal,
+      messages: [{ role: 'user', content: [...imgs, { type: 'text', text: `Topic: ${topic.name}${title ? `\nReading: ${title}` : ''}\nThese are pages ${i + 1}-${i + batch.length} of ${files.length}, in order (${batch.length} image${batch.length > 1 ? 's' : ''}).\nLOS so far: ${los.length ? JSON.stringify(los) : '(not seen yet)'}\nLast slides already written (do NOT repeat them; if the first text here continues a sentence from them, start with the continuation):\n${prev || '(start of reading)'}\n\nReturn ONLY JSON in this shape:\n${SLIDE_SCHEMA}` }] }],
+    }, `pages ${i + 1}-${i + batch.length}`);
+    if (Array.isArray(out.los) && out.los.length && !los.length) los = out.los.filter((l) => l && l.id && l.text);
+    for (const s of out.slides || []) {
+      if (!s || typeof s !== 'object') continue;
+      if (s.kind === 'exhibit') {
+        const pg = Math.min(Math.max((Number(s.page) || 1) - 1, 0), b64s.length - 1);
+        s.img = await cropJpeg(b64s[pg], s.bbox);
+      }
+      delete s.bbox; delete s.page;
+      const hasContent = s.text || s.formula || s.img || s.caption || (s.rows && s.rows.length);
+      if (hasContent) slides.push(s);
+    }
+  }
+  if (!slides.length) throw new Error('No readable text found in the screenshots. Try clearer, larger screenshots.');
+  return { los, slides };
+}
+
+export function slidesToNotes(slides) {
+  let head = '';
+  return slides.map((s) => {
+    const h = s.heading && s.heading !== head ? `\n## ${s.heading}\n` : ''; head = s.heading || head;
+    const tbl = s.columns?.length ? `\n${s.columns.join(' | ')}\n${(s.rows || []).map((r) => r.join(' | ')).join('\n')}` : '';
+    return `${h}${s.text || ''}${s.formula ? `\nFORMULA: ${s.formula}` : ''}${s.caption ? `\nEXHIBIT: ${s.caption}` : ''}${tbl}`;
+  }).join('\n\n');
+}
+
 // Build the visual map (outline + section blocks) from notes.
 export async function buildMap({ notes, topicId, title, log = () => {}, signal }) {
   const topic = topicById(topicId);
@@ -218,15 +298,21 @@ async function buildQuiz({ notes, los, title, topic, log, signal }) {
   return boss;
 }
 
-export async function generateLevel({ files, topicId, title, onLog, signal, notes: cachedNotes, onNotes }) {
+export async function generateLevel({ files, topicId, title, onLog, signal, deck: cachedDeck, onDeck }) {
   const log = (m) => onLog?.(m);
   const topic = topicById(topicId);
 
-  let notes = cachedNotes || '';
-  if (!notes) { notes = await extractNotes({ files, topic, title, log, signal }); onNotes?.(notes); }
-  else log('Using the screenshots already read — skipping straight to building.');
+  let deck = cachedDeck;
+  if (!deck) { deck = await buildSlides({ files, topic, title, log, signal }); onDeck?.(deck); }
+  else log('Using the pages already transcribed — skipping straight to building.');
 
-  const { outline, map } = await buildMap({ notes, topicId, title, log, signal });
+  const notes = slidesToNotes(deck.slides);
+  let los = deck.los || [];
+  if (!los.length) {
+    log('No LOS page found — deriving the outcomes from the text…');
+    const o = await callJSON({ system: EXAM_SYSTEM, maxTokens: 3000, signal, messages: [{ role: 'user', content: `STUDY NOTES:\n${notes.slice(0, 40000)}\n\nReturn ONLY JSON: {"los":[{"id":"a","text":"(derived) ..."}]} — the learning outcomes this reading teaches, 2-8 items.` }] }, 'the outcomes');
+    los = o.los || [];
+  }
 
   log('Writing the glossary…');
   const fm = await callJSON({
@@ -234,13 +320,12 @@ export async function generateLevel({ files, topicId, title, onLog, signal, note
     messages: [{ role: 'user', content: `STUDY NOTES:\n${notes}\n\nReturn ONLY JSON: {"fieldManual":[{"term":"","definition":"precise exam-ready definition (1-2 short sentences)","formula":"optional","trap":"optional exam trap"}]}\nInclude every defined term and every formula in the notes.` }],
   }, 'the glossary');
 
-  const los = outline.los || [];
-  const boss = await buildQuiz({ notes, los, title: outline.title || title, topic, log, signal });
+  const boss = await buildQuiz({ notes, los, title, topic, log, signal });
 
   const level = {
     id: `lvl-${Date.now().toString(36)}`, topicId, source: 'ai', createdAt: new Date().toISOString(),
-    title: outline.title || title || 'Untitled reading', module: outline.module || '', storyBeat: '',
-    los, map, missions: [], fieldManual: fm.fieldManual || [], boss, notes,
+    title: title || 'Untitled reading', module: '', storyBeat: '',
+    los, slides: deck.slides, missions: [], fieldManual: fm.fieldManual || [], boss, notes,
   };
   log('Checking calculations and LOS coverage…');
   const report = sanitizeLevel(level);
@@ -283,10 +368,11 @@ export function sanitizeLevel(level) {
   const covered = new Set();
   level.missions.forEach((m) => (m.losIds || []).forEach((x) => covered.add(x)));
   (level.map?.sections || []).forEach((sec) => (sec.losIds || []).forEach((x) => covered.add(x)));
+  (level.slides || []).forEach((sl) => { if (sl.losId) covered.add(sl.losId); });
   (level.map?.sections || []).forEach((sec, i) => { if (!sec.blocks?.length) issues.push(`Section ${i + 1} (${sec.title}) came back empty — use Rebuild map on the LOS tab.`); });
   const bossCovered = new Set(level.boss.map((q) => q.losId));
   const coverage = level.los.map((l) => ({ ...l, inMission: covered.has(l.id), inBoss: bossCovered.has(l.id) }));
-  coverage.filter((c) => !c.inMission).forEach((c) => issues.push(`LOS ${c.id} isn't mapped to a section.`));
+  coverage.filter((c) => !c.inMission).forEach((c) => issues.push(`LOS ${c.id} has no slides tagged to it (the text is still in the deck, in order).`));
   coverage.filter((c) => !c.inBoss).forEach((c) => issues.push(`LOS ${c.id} isn't tested in the quiz.`));
   return { coverage, issues };
 }
@@ -299,6 +385,7 @@ export function coachSystem(ctx) {
     const t = topicById(lvl.topicId);
     context += `\nThe learner is currently on the reading "${lvl.title}" (${t?.name}).`;
     if (lvl.map) context += `\nBig picture: ${lvl.map.bigPicture}\nSections: ${lvl.map.sections.map((x, i) => `${i + 1}. ${x.title} — ${x.gist}`).join('; ')}`;
+    if (ctx.slide) context += `\nThey are reading slide ${ctx.slide.n} of ${ctx.slide.total} (the curriculum text, word for word) and did not understand it. The slide:\n"""${ctx.slide.text}\n"""\nThe slides just before it, for context:\n${ctx.slide.before}\nExplain what THIS slide means: first in one plain sentence, then the idea step by step in the order the slide presents it, with a tiny concrete example or number if it helps. Do not drift to other parts of the reading.`;
     if (ctx.section) context += `\nThey are looking at the section "${ctx.section.title}": ${JSON.stringify(ctx.section.blocks || []).slice(0, 4000)}`;
     if (ctx.mission) context += `\nCurrent mission: ${ctx.mission.title}\n${ctx.mission.concept}`;
     if (lvl.notes) context += `\nSource notes from the learner's curriculum (trust these over general knowledge if they differ):\n${lvl.notes.slice(0, 14000)}`;

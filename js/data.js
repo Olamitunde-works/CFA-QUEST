@@ -142,6 +142,18 @@ export const DEMO_LEVEL = {
     { id: 'c', text: 'Estimate the cost of equity using CAPM and the bond-yield-plus-risk-premium approach' },
     { id: 'd', text: 'Estimate the cost of preferred stock' },
   ],
+  slides: [
+    { kind: 'list', heading: 'Learning outcomes', losId: '', text: '- a) Calculate and interpret the weighted average cost of capital (WACC)\n- b) Explain why and how the cost of debt is adjusted for taxes, and estimate it\n- c) Estimate the cost of equity using CAPM and the bond-yield-plus-risk-premium approach\n- d) Estimate the cost of preferred stock' },
+    { kind: 'text', heading: 'Weighted average cost of capital', losId: 'a', text: 'A company raises money from several sources: debt, preferred stock and common equity. Each source requires a different return.\n\nThe **weighted average cost of capital (WACC)** blends those required returns into one number, using the proportion of each source in the capital structure as the weight.' },
+    { kind: 'formula', heading: 'Weighted average cost of capital', losId: 'a', text: 'With debt, preferred stock and common equity in the capital structure:', formula: 'WACC = wd × rd × (1 − t) + wp × rp + we × re' },
+    { kind: 'table', heading: 'Weighted average cost of capital', losId: 'a', text: 'What each term in the formula stands for:', columns: ['Term', 'Meaning'], rows: [['wd, wp, we', 'Weights of debt, preferred stock and equity; they sum to 1'], ['rd', 'Before-tax cost of debt'], ['t', 'Marginal tax rate'], ['rp', 'Cost of preferred stock'], ['re', 'Cost of common equity']] },
+    { kind: 'text', heading: 'Choosing the weights', losId: 'a', text: 'The weights should reflect the **target capital structure**, the mix the company aims to hold over time.\n\nIf no target is available, use the **current market values** of each source. Book values from the balance sheet are not appropriate because they can differ widely from market values.' },
+    { kind: 'text', heading: 'Cost of debt and the tax shield', losId: 'b', text: 'Interest paid on debt is tax deductible. For every unit of interest, the company saves tax at its marginal rate **t**.\n\nSo the cost of debt that matters is the **after-tax cost of debt**: rd × (1 − t). Dividends on preferred and common stock are not deductible, so neither gets this adjustment.' },
+    { kind: 'example', heading: 'Cost of debt and the tax shield', losId: 'b', text: 'A company can borrow at a before-tax cost of 6.0% and faces a marginal tax rate of 25%.\n\nAfter-tax cost of debt = 6.0% × (1 − 0.25) = 4.5%.' },
+    { kind: 'formula', heading: 'Cost of equity: CAPM', losId: 'c', text: 'The **capital asset pricing model (CAPM)** estimates the required return on equity from the risk-free rate, the stock’s beta and the equity risk premium:', formula: 're = Rf + β × (E(Rm) − Rf)' },
+    { kind: 'text', heading: 'Cost of equity: bond yield plus risk premium', losId: 'c', text: 'An alternative is to start from the company’s own long-term bond yield and add a premium for the extra risk of equity:\n\nre = bond yield + risk premium\n\nThe risk premium is typically estimated from history and is often in the range of 3% to 5%.' },
+    { kind: 'formula', heading: 'Cost of preferred stock', losId: 'd', text: 'Preferred stock pays a fixed dividend forever, so it is valued as a perpetuity. Rearranging, the cost of preferred stock is the dividend divided by the price:', formula: 'rp = Dp / P' },
+  ],
   map: {
     bigPicture: 'Every source of money has a price. WACC blends those prices into one hurdle rate that projects must beat.',
     why: 'Too low a hurdle accepts value-destroying projects; too high rejects good ones.',

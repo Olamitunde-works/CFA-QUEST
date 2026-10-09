@@ -117,6 +117,10 @@ export function levelState(id) {
 export function levelCompletion(level) {
   const s = state.progress.levelState[level.id];
   if (!s) return 0;
+  if (level.slides?.length) {
+    const seen = ((s.slideMax ?? -1) + 1) / level.slides.length;
+    return Math.min(1, seen) * 0.8 + (s.bossPassed ? 0.2 : 0);
+  }
   if (level.map?.sections?.length) {
     const total = level.map.sections.length + 1;
     return ((s.sectionsDone || []).length + (s.bossPassed ? 1 : 0)) / total;

@@ -6,6 +6,7 @@ import { buildPlan, defaultInputs, STATUS, GOALS, ORDERS, todayFromPlan, moduleL
 import { syncReminders, unsubscribeReminders, downloadICS } from './reminders.js';
 import { callClaude, generateLevel, coachSystem, convertToMap } from './ai.js';
 import { renderMapPane } from './map.js';
+import { renderSlides, slideText } from './slides.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -118,6 +119,7 @@ $('#focusClose').onclick = () => { clearInterval(focusTimer); $('#focus').hidden
 const routes = { '': viewHome, level: viewLevel, topic: viewTopic, review: viewReview, plan: viewPlan, add: viewAdd, settings: viewSettings };
 let coachCtx = {};
 function route() {
+  document.body.classList.remove('reader-full');
   const [path, qs] = location.hash.replace(/^#\/?/, '').split('?');
   const [name, id] = path.split('/');
   const params = Object.fromEntries(new URLSearchParams(qs || ''));
@@ -320,12 +322,13 @@ function viewLevel(id, params) {
   const t = topicById(level.topicId);
   const ls = levelState(level.id);
   if (!ls.enrolled) { enrollLevel(level); ls.enrolled = true; save('progress'); }
-  let tab = params.tab || ((level.map || level.notes) ? 'map' : (ls.missionsDone.length ? 'missions' : 'brief'));
+  let tab = params.tab || (level.slides ? 'read' : (level.map || level.notes) ? 'map' : (ls.missionsDone.length ? 'missions' : 'brief'));
   let mi = Math.min(level.missions.findIndex((m) => !ls.missionsDone.includes(m.id)), level.missions.length - 1);
   if (mi < 0) mi = 0;
 
   const draw = () => {
-    coachCtx = { level, mission: tab === 'missions' ? level.missions[mi] : null, section: coachCtx.section };
+    document.body.classList.remove('reader-full');
+    coachCtx = { level, mission: tab === 'missions' ? level.missions[mi] : null, section: coachCtx.section, slide: tab === 'read' ? coachCtx.slide : null };
     updateCoachCtx();
     const pct = levelCompletion(level);
     app.innerHTML = `
@@ -336,7 +339,8 @@ function viewLevel(id, params) {
       </div>
       <div class="tabs" role="tablist">
         ${[
-          ...((level.map || level.notes) ? [['map', `🧭 Map${level.map ? ` ${ls.sectionsDone.length}/${level.map.sections.length}` : ''}`]] : []),
+          ...((level.slides || level.notes) ? [['read', `📖 Read${level.slides ? ` ${Math.min((ls.slideMax ?? -1) + 1, level.slides.length)}/${level.slides.length}` : ''}`]] : []),
+          ...((!level.slides && (level.map || level.notes)) ? [['map', `🧭 Map${level.map ? ` ${ls.sectionsDone.length}/${level.map.sections.length}` : ''}`]] : []),
           ...(level.missions.length ? [['brief', '🎬 Story'], ['missions', `🗺 Missions ${ls.missionsDone.length}/${level.missions.length}`]] : []),
           ['boss', `👹 Quiz${ls.bossPassed ? ' ★' : ''}`], ['manual', '📘 Glossary'], ['los', '✅ LOS']]
           .map(([k, l]) => `<button role="tab" class="${tab === k ? 'active' : ''}" data-tab="${k}">${l}</button>`).join('')}
@@ -344,8 +348,47 @@ function viewLevel(id, params) {
       <div id="pane"></div>`;
     $$('[data-tab]').forEach((b) => b.onclick = () => { tab = b.dataset.tab; draw(); });
     const pane = $('#pane');
-    ({ map: paneMap, brief: paneBrief, missions: paneMissions, manual: paneManual, boss: paneBoss, los: paneLos })[tab](pane);
+    ({ read: paneRead, map: paneMap, brief: paneBrief, missions: paneMissions, manual: paneManual, boss: paneBoss, los: paneLos })[tab](pane);
   };
+
+  function paneRead(pane) {
+    if (!level.slides) {
+      pane.innerHTML = `<div class="card stack"><h2>📖 Read this as slides</h2>
+        <p>This reading was built before the slide reader existed, so I only have a condensed copy of it. To read the curriculum itself, word for word, one slide at a time, upload the same screenshots again.</p>
+        <div class="row"><a class="btn primary" href="#/add?topic=${level.topicId}${level.moduleIdx != null ? `&mod=${level.moduleIdx}` : ''}">📸 Re-upload screenshots</a></div></div>`;
+      return;
+    }
+    const total = level.slides.length;
+    const startAt = Math.min(ls.slideIdx ?? 0, total - 1);
+    renderSlides(pane, level, {
+      autoFull: true, start: startAt, bionic: state.settings.bionic !== false, scale: state.settings.slideScale || 1,
+      onBionic: (v) => { state.settings.bionic = v; save('settings'); },
+      onScale: (v) => { state.settings.slideScale = v; save('settings'); },
+      onMove: (i, sl, losId, lastOf) => {
+        ls.slideIdx = i;
+        if (i > (ls.slideMax ?? -1)) {
+          ls.slideMax = i;
+          if ((i + 1) % 5 === 0) gainXP(5, 'reading');
+        }
+        ls.losDone = ls.losDone || [];
+        for (const [id, last] of Object.entries(lastOf)) {
+          if (i >= last && !ls.losDone.includes(id)) { ls.losDone.push(id); gainXP(10, `LOS ${id} read`); }
+        }
+        save('progress');
+        coachCtx.slide = { n: i + 1, total, text: slideText(sl), before: level.slides.slice(Math.max(0, i - 3), i).map(slideText).join('\n---\n') };
+        updateCoachCtx();
+        const tb = $('[data-tab="read"]'); if (tb) tb.textContent = `📖 Read ${Math.min((ls.slideMax ?? -1) + 1, total)}/${total}`;
+        const bar = $('.level-top .progress i'); if (bar) bar.style.width = `${levelCompletion(level) * 100}%`;
+      },
+      onAsk: (sl, i) => { coachCtx.slide = { n: i + 1, total, text: slideText(sl), before: level.slides.slice(Math.max(0, i - 3), i).map(slideText).join('\n---\n') }; updateCoachCtx(); openCoach('I don\'t understand this slide. Explain it step by step.'); },
+      onFinish: () => {
+        confetti();
+        pane.querySelector('.rd-stage').innerHTML = `<div class="card rd-done"><h2>🎉 You've read the whole reading</h2><p>Now watch the Meldrum video on it, then test yourself.</p><div class="row" style="justify-content:center"><button class="btn primary" id="toQuiz">👹 Take the quiz</button><button class="btn" id="again">↺ Back to slide 1</button></div></div>`;
+        $('#toQuiz').onclick = () => { tab = 'boss'; draw(); };
+        $('#again').onclick = () => { ls.slideIdx = 0; draw(); };
+      },
+    });
+  }
 
   function paneMap(pane) {
     if (!level.map) {
@@ -677,12 +720,12 @@ function showPlan(r) {
 
 // ---------------- ADD READING ----------------
 let pendingFiles = [];
-let notesCache = { key: '', notes: '' }; // screenshots already read, reused if a build is retried
+let notesCache = { key: '', deck: null }; // pages already transcribed, reused if a build is retried
 function viewAdd(_, params) {
   const topicId = params.topic || '';
   app.innerHTML = `
     <h1>📸 Add a reading</h1>
-    <p class="muted">Screenshot every page of one reading (one Learning Module), starting with the LOS page. The AI reads them in order, keeps every detail, and builds a visual map, a glossary and a quiz. Bigger readings take a few minutes.</p>
+    <p class="muted">Screenshot every page of one reading (one Learning Module), starting with the LOS page. The text is copied word for word into swipeable slides that follow the LOS. A glossary and a quiz are added too. Bigger readings take a few minutes.</p>
     <div class="card stack">
       <div class="form-grid">
         <div><label>Topic</label><select id="topic">${TOPICS.map((t) => `<option value="${t.id}" ${t.id === topicId ? 'selected' : ''}>${t.icon} ${esc(t.name)}</option>`).join('')}</select></div>
@@ -740,9 +783,9 @@ function viewAdd(_, params) {
       const mi = modVal === 'other' ? null : Number(modVal);
       const title = mi == null ? $('#title').value.trim() : MODULES[tid][mi];
       const fileKey = pendingFiles.map((f) => `${f.name}:${f.size}`).join('|');
-      const cached = notesCache.key === fileKey ? notesCache.notes : null;
-      const { level, report } = await generateLevel({ files: pendingFiles, topicId: tid, title, onLog: log, signal: ctrl.signal, notes: cached, onNotes: (n) => { notesCache = { key: fileKey, notes: n }; } });
-      notesCache = { key: '', notes: '' };
+      const cached = notesCache.key === fileKey ? notesCache.deck : null;
+      const { level, report } = await generateLevel({ files: pendingFiles, topicId: tid, title, onLog: log, signal: ctrl.signal, deck: cached, onDeck: (d) => { notesCache = { key: fileKey, deck: d }; } });
+      notesCache = { key: '', deck: null };
       if (mi != null) { level.moduleIdx = mi; level.title = title; }
       state.levels[level.id] = level;
       await save('levels');
@@ -750,12 +793,12 @@ function viewAdd(_, params) {
       gainXP(25, 'new level unlocked');
       confetti();
       out.innerHTML = `<div class="card" style="margin-top:16px"><h2>🎉 Level ready: ${esc(level.title)}</h2>
-        <p>${level.map?.sections.length || level.missions.length} sections · ${level.boss.length}-question quiz · ${level.fieldManual.length} glossary entries</p>
+        <p>${level.slides?.length || level.map?.sections.length || level.missions.length} slides · ${level.boss.length}-question quiz · ${level.fieldManual.length} glossary entries</p>
         <ul class="los-list">${report.coverage.map((c) => `<li><span class="chk ${c.inMission && c.inBoss ? 'on' : ''}">${c.inMission && c.inBoss ? '✓' : '!'}</span>${esc(c.id)}. ${esc(c.text)}</li>`).join('')}</ul>
-        ${report.issues.length ? `<div class="alert warn" style="margin-top:12px"><b>Heads-up:</b><ul style="margin:6px 0 0;padding-left:18px">${report.issues.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : '<div class="alert ok" style="margin-top:12px">Every LOS is mapped to a section and tested in the quiz.</div>'}
-        <div class="row" style="margin-top:14px"><a class="btn primary" href="#/level/${level.id}">Play it →</a></div></div>`;
+        ${report.issues.length ? `<div class="alert warn" style="margin-top:12px"><b>Heads-up:</b><ul style="margin:6px 0 0;padding-left:18px">${report.issues.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : '<div class="alert ok" style="margin-top:12px">Every LOS has slides and is tested in the quiz.</div>'}
+        <div class="row" style="margin-top:14px"><a class="btn primary" href="#/level/${level.id}">Start reading →</a></div></div>`;
     } catch (e) {
-      out.innerHTML = `<div class="alert err" style="margin-top:16px"><b>Couldn't build the level.</b> ${esc(e.name === 'AbortError' ? 'Cancelled.' : e.message)}${notesCache.notes ? '<br><small>Your screenshots are already read — press <b>Build level</b> again and it will skip straight to building (faster and cheaper).</small>' : ''}</div>`;
+      out.innerHTML = `<div class="alert err" style="margin-top:16px"><b>Couldn't build the level.</b> ${esc(e.name === 'AbortError' ? 'Cancelled.' : e.message)}${notesCache.deck ? '<br><small>Your pages are already transcribed — press <b>Build level</b> again and it will skip straight to building (faster and cheaper).</small>' : ''}</div>`;
       $('#gen').disabled = false;
     } finally { removeEventListener('beforeunload', warn); }
   };
@@ -827,7 +870,7 @@ const chat = [];
 function updateCoachCtx() {
   const el = $('#coachCtx');
   if (!el) return;
-  el.textContent = coachCtx.level ? `On: ${coachCtx.level.title}${coachCtx.section ? ' › ' + coachCtx.section.title : coachCtx.mission ? ' › ' + P(coachCtx.mission.title) : ''}` : 'General questions';
+  el.textContent = coachCtx.level ? `On: ${coachCtx.level.title}${coachCtx.slide ? ` › slide ${coachCtx.slide.n}` : coachCtx.section ? ' › ' + coachCtx.section.title : coachCtx.mission ? ' › ' + P(coachCtx.mission.title) : ''}` : 'General questions';
 }
 function drawChat() {
   const log = $('#coachLog');
@@ -866,7 +909,7 @@ function onboarding() {
   let pick = WORLDS[0].id;
   modal(`
     <div class="kicker">Welcome to</div><h1>▲ CFA Quest</h1>
-    <p>Every reading becomes a visual map you can scan in minutes — then a quiz, then a review queue that won't let you forget.</p>
+    <p>Every reading becomes slides you can swipe through — then a quiz, then a review queue that won't let you forget.</p>
     <label>Your name</label><input id="obName" placeholder="First name">
     <label style="margin-top:16px">Pick your story world</label>
     <div class="world-pick">${WORLDS.map((w) => `<button class="world-opt ${w.id === pick ? 'sel' : ''}" data-w="${w.id}"><b>${esc(w.company)}</b><small>${esc(w.industry)}</small></button>`).join('')}</div>
