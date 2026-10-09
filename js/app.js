@@ -4,7 +4,8 @@ import { rollVars, solveCalc, fillTemplate, isClose, formatValue } from './expr.
 import { enrollLevel, grade, recordMiss, flagLos, dueItems, dueCount, resolveItem, masteryForLevel } from './srs.js';
 import { buildPlan, defaultInputs, STATUS, GOALS, ORDERS, todayFromPlan, moduleLabel, upcoming, dayText } from './plan.js';
 import { syncReminders, unsubscribeReminders, downloadICS } from './reminders.js';
-import { callClaude, generateLevel, coachSystem } from './ai.js';
+import { callClaude, generateLevel, coachSystem, convertToMap } from './ai.js';
+import { renderMapPane } from './map.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -165,7 +166,7 @@ function viewHome() {
   } else if (tp?.phase === 'review') quests.push({ href: '#/review', ico: '🗓', t: 'Plan: review & mock exam phase', s: `${tp.hours}h today` });
   else if (tp?.phase === 'rest') quests.push({ href: '#/plan', ico: '🌴', t: 'Rest day on your plan', s: 'Recharge — the streak survives a light review' });
   else if (!state.plan) quests.push({ href: '#/plan', ico: '🗓', t: 'Build your study plan', s: 'Exam date + hours → a schedule that fits' });
-  if (!allLevels.some((l) => l.source !== 'demo')) quests.push({ href: '#/add', ico: '📸', t: 'Add your first reading', s: 'Upload screenshots, get a playable level' });
+  if (!allLevels.some((l) => l.source !== 'demo')) quests.push({ href: '#/add', ico: '📸', t: 'Add your first reading', s: 'Upload screenshots, get a visual map + quiz' });
   if (!quests.length) quests.push({ href: '#/add', ico: '📸', t: 'Add your next reading', s: 'Keep the story moving' });
 
   app.innerHTML = `
@@ -240,7 +241,7 @@ function levelRow(l, num, t) {
   const s = state.progress.levelState[l.id];
   return `<a class="level-row" href="#/level/${l.id}">
     <span class="level-num" style="color:${t.color}">${s?.bossPassed ? '★' : num}</span>
-    <span class="meta"><b>${esc(l.title)}</b><small>${l.missions.length} missions · ${l.boss.length}-question boss${l.source === 'demo' ? ' · demo' : ''} · mastery ${Math.round(mast * 100)}%</small>
+    <span class="meta"><b>${esc(l.title)}</b><small>${l.map ? `${l.map.sections.length} sections` : `${l.missions.length} missions`} · ${l.boss.length}-question quiz${l.source === 'demo' ? ' · demo' : ''} · mastery ${Math.round(mast * 100)}%</small>
     <div class="progress"><i style="width:${Math.round(pct * 100)}%"></i></div></span>
     <span class="go muted">→</span></a>`;
 }
@@ -319,12 +320,12 @@ function viewLevel(id, params) {
   const t = topicById(level.topicId);
   const ls = levelState(level.id);
   if (!ls.enrolled) { enrollLevel(level); ls.enrolled = true; save('progress'); }
-  let tab = params.tab || (ls.missionsDone.length ? 'missions' : 'brief');
+  let tab = params.tab || ((level.map || level.notes) ? 'map' : (ls.missionsDone.length ? 'missions' : 'brief'));
   let mi = Math.min(level.missions.findIndex((m) => !ls.missionsDone.includes(m.id)), level.missions.length - 1);
   if (mi < 0) mi = 0;
 
   const draw = () => {
-    coachCtx = { level, mission: tab === 'missions' ? level.missions[mi] : null };
+    coachCtx = { level, mission: tab === 'missions' ? level.missions[mi] : null, section: coachCtx.section };
     updateCoachCtx();
     const pct = levelCompletion(level);
     app.innerHTML = `
@@ -334,14 +335,45 @@ function viewLevel(id, params) {
         <div style="min-width:160px"><small>${Math.round(pct * 100)}% complete</small><div class="progress"><i style="width:${pct * 100}%"></i></div></div>
       </div>
       <div class="tabs" role="tablist">
-        ${[['brief', '🎬 Briefing'], ['missions', `🗺 Missions ${ls.missionsDone.length}/${level.missions.length}`], ['manual', '📘 Field Manual'], ['boss', `👹 Boss${ls.bossPassed ? ' ★' : ''}`], ['los', '✅ LOS']]
+        ${[
+          ...((level.map || level.notes) ? [['map', `🧭 Map${level.map ? ` ${ls.sectionsDone.length}/${level.map.sections.length}` : ''}`]] : []),
+          ...(level.missions.length ? [['brief', '🎬 Story'], ['missions', `🗺 Missions ${ls.missionsDone.length}/${level.missions.length}`]] : []),
+          ['boss', `👹 Quiz${ls.bossPassed ? ' ★' : ''}`], ['manual', '📘 Glossary'], ['los', '✅ LOS']]
           .map(([k, l]) => `<button role="tab" class="${tab === k ? 'active' : ''}" data-tab="${k}">${l}</button>`).join('')}
       </div>
       <div id="pane"></div>`;
     $$('[data-tab]').forEach((b) => b.onclick = () => { tab = b.dataset.tab; draw(); });
     const pane = $('#pane');
-    ({ brief: paneBrief, missions: paneMissions, manual: paneManual, boss: paneBoss, los: paneLos })[tab](pane);
+    ({ map: paneMap, brief: paneBrief, missions: paneMissions, manual: paneManual, boss: paneBoss, los: paneLos })[tab](pane);
   };
+
+  function paneMap(pane) {
+    if (!level.map) {
+      pane.innerHTML = `<div class="card stack"><h2>🧭 Turn this reading into a map</h2>
+        <p>Builds a mind map and a scannable section-by-section breakdown from the pages you already uploaded — no new screenshots needed.</p>
+        <div class="row"><button class="btn primary" id="mkMap">✨ Build the map</button></div><div id="mapLog"></div></div>`;
+      $('#mkMap').onclick = async () => {
+        $('#mkMap').disabled = true;
+        $('#mapLog').innerHTML = '<div class="gen-log" id="mlog"></div>';
+        const log = (m) => { const d = document.createElement('div'); d.textContent = m; $('#mlog')?.appendChild(d); };
+        try { await convertToMap(level, log); await save('levels'); toast('🧭 Map ready'); draw(); }
+        catch (e) { $('#mapLog').innerHTML = `<div class="alert err">${esc(e.message)}</div>`; $('#mkMap').disabled = false; }
+      };
+      return;
+    }
+    renderMapPane(pane, level, {
+      done: [...ls.sectionsDone], focus: !!state.settings.mapFocus,
+      onTick: (i) => {
+        if (ls.sectionsDone.includes(i)) return;
+        ls.sectionsDone.push(i); save('progress'); gainXP(15, 'section mapped');
+        if (ls.sectionsDone.length === level.map.sections.length) { confetti(); toast('🧭 Whole map done — watch the video, then take the quiz 👹'); }
+        const tb = $('[data-tab="map"]'); if (tb) tb.textContent = `🧭 Map ${ls.sectionsDone.length}/${level.map.sections.length}`;
+      },
+      onAsk: (sec) => { coachCtx.section = sec; updateCoachCtx(); openCoach(`Explain "${sec.title}" another way — simpler, with a quick structure I can picture.`); },
+      onSection: (sec) => { coachCtx.section = sec; updateCoachCtx(); },
+      onFocusToggle: (f) => { state.settings.mapFocus = f; save('settings'); },
+    });
+  }
 
   function paneBrief(pane) {
     const b = level.briefing || {};
@@ -457,12 +489,20 @@ function viewLevel(id, params) {
         const inB = level.boss.filter((q) => q.losId === l.id).length;
         return `<li><span class="chk ${inM ? 'on' : ''}">${inM ? '✓' : '!'}</span><span style="flex:1"><b>${esc(l.id)}.</b> ${esc(l.text)}<br><small>${inM} mission${inM === 1 ? '' : 's'} · ${inB} boss question${inB === 1 ? '' : 's'}</small></span><button class="btn small" data-flag="${esc(l.id)}">Missed a practice Q</button></li>`;
       }).join('')}</ul></div>
+      ${level.notes ? `<div class="card"><h3>Rebuild the map</h3><p class="muted">Re-generates the map from the pages you uploaded. Your ticks reset for this reading.</p><button class="btn small" id="rebuildMap">🔁 Rebuild map</button><div id="rbLog"></div></div>` : ''}
       ${level.source === 'ai' ? `<div class="card"><h3>Something look off?</h3><p class="muted">AI can make mistakes. If a mission disagrees with the curriculum, ask Coach to check it against your source notes.</p><button class="btn small" id="reportOff">Ask Coach to double-check this level</button></div>` : ''}`;
     $$('[data-flag]', pane).forEach((b) => b.onclick = () => {
       const n = flagLos(level.id, b.dataset.flag);
       toast(n ? `🔁 ${n} item${n > 1 ? 's' : ''} for LOS ${b.dataset.flag} moved to today's review` : 'Logged. Study this LOS again in the missions.');
       renderHUD();
     });
+    const rb = $('#rebuildMap', pane);
+    if (rb) rb.onclick = async () => {
+      rb.disabled = true; $('#rbLog').innerHTML = '<div class="gen-log" id="rblog"></div>';
+      const log = (m) => { const d = document.createElement('div'); d.textContent = m; $('#rblog')?.appendChild(d); };
+      try { await convertToMap(level, log); ls.sectionsDone = []; await save('levels', 'progress'); toast('🧭 Map rebuilt'); tab = 'map'; draw(); }
+      catch (e) { $('#rbLog').innerHTML = `<div class="alert err">${esc(e.message)}</div>`; rb.disabled = false; }
+    };
     const r = $('#reportOff', pane);
     if (r) r.onclick = () => openCoach('Something in this level might not match my curriculum. Which statements in the field manual or missions are you least sure about, compared to the source notes? Check the formulas especially.');
   }
@@ -642,7 +682,7 @@ function viewAdd(_, params) {
   const topicId = params.topic || '';
   app.innerHTML = `
     <h1>📸 Add a reading</h1>
-    <p class="muted">Screenshot every page of one reading (one Learning Module), starting with the LOS page. The AI reads them in order, keeps every detail, and builds a level set in your story world. Bigger readings take a few minutes.</p>
+    <p class="muted">Screenshot every page of one reading (one Learning Module), starting with the LOS page. The AI reads them in order, keeps every detail, and builds a visual map, a glossary and a quiz. Bigger readings take a few minutes.</p>
     <div class="card stack">
       <div class="form-grid">
         <div><label>Topic</label><select id="topic">${TOPICS.map((t) => `<option value="${t.id}" ${t.id === topicId ? 'selected' : ''}>${t.icon} ${esc(t.name)}</option>`).join('')}</select></div>
@@ -710,9 +750,9 @@ function viewAdd(_, params) {
       gainXP(25, 'new level unlocked');
       confetti();
       out.innerHTML = `<div class="card" style="margin-top:16px"><h2>🎉 Level ready: ${esc(level.title)}</h2>
-        <p>${level.missions.length} missions · ${level.boss.length}-question boss · ${level.fieldManual.length} field-manual entries</p>
+        <p>${level.map?.sections.length || level.missions.length} sections · ${level.boss.length}-question quiz · ${level.fieldManual.length} glossary entries</p>
         <ul class="los-list">${report.coverage.map((c) => `<li><span class="chk ${c.inMission && c.inBoss ? 'on' : ''}">${c.inMission && c.inBoss ? '✓' : '!'}</span>${esc(c.id)}. ${esc(c.text)}</li>`).join('')}</ul>
-        ${report.issues.length ? `<div class="alert warn" style="margin-top:12px"><b>Heads-up:</b><ul style="margin:6px 0 0;padding-left:18px">${report.issues.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : '<div class="alert ok" style="margin-top:12px">Every LOS is covered by a mission and the boss fight.</div>'}
+        ${report.issues.length ? `<div class="alert warn" style="margin-top:12px"><b>Heads-up:</b><ul style="margin:6px 0 0;padding-left:18px">${report.issues.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : '<div class="alert ok" style="margin-top:12px">Every LOS is mapped to a section and tested in the quiz.</div>'}
         <div class="row" style="margin-top:14px"><a class="btn primary" href="#/level/${level.id}">Play it →</a></div></div>`;
     } catch (e) {
       out.innerHTML = `<div class="alert err" style="margin-top:16px"><b>Couldn't build the level.</b> ${esc(e.name === 'AbortError' ? 'Cancelled.' : e.message)}${notesCache.notes ? '<br><small>Your screenshots are already read — press <b>Build level</b> again and it will skip straight to building (faster and cheaper).</small>' : ''}</div>`;
@@ -787,7 +827,7 @@ const chat = [];
 function updateCoachCtx() {
   const el = $('#coachCtx');
   if (!el) return;
-  el.textContent = coachCtx.level ? `On: ${coachCtx.level.title}${coachCtx.mission ? ' › ' + P(coachCtx.mission.title) : ''}` : 'General questions';
+  el.textContent = coachCtx.level ? `On: ${coachCtx.level.title}${coachCtx.section ? ' › ' + coachCtx.section.title : coachCtx.mission ? ' › ' + P(coachCtx.mission.title) : ''}` : 'General questions';
 }
 function drawChat() {
   const log = $('#coachLog');
@@ -826,7 +866,7 @@ function onboarding() {
   let pick = WORLDS[0].id;
   modal(`
     <div class="kicker">Welcome to</div><h1>▲ CFA Quest</h1>
-    <p>Every reading becomes a story mission inside one company you follow through all 10 topics — then a boss fight, then a review queue that won't let you forget.</p>
+    <p>Every reading becomes a visual map you can scan in minutes — then a quiz, then a review queue that won't let you forget.</p>
     <label>Your name</label><input id="obName" placeholder="First name">
     <label style="margin-top:16px">Pick your story world</label>
     <div class="world-pick">${WORLDS.map((w) => `<button class="world-opt ${w.id === pick ? 'sel' : ''}" data-w="${w.id}"><b>${esc(w.company)}</b><small>${esc(w.industry)}</small></button>`).join('')}</div>

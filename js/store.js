@@ -109,13 +109,18 @@ export function currentStreak() {
 
 export function levelState(id) {
   const ls = state.progress.levelState;
-  if (!ls[id]) ls[id] = { missionsDone: [], bossBest: null, bossPassed: false, startedAt: todayKey() };
+  if (!ls[id]) ls[id] = { missionsDone: [], sectionsDone: [], bossBest: null, bossPassed: false, startedAt: todayKey() };
+  if (!ls[id].sectionsDone) ls[id].sectionsDone = [];
   return ls[id];
 }
 
 export function levelCompletion(level) {
   const s = state.progress.levelState[level.id];
   if (!s) return 0;
+  if (level.map?.sections?.length) {
+    const total = level.map.sections.length + 1;
+    return ((s.sectionsDone || []).length + (s.bossPassed ? 1 : 0)) / total;
+  }
   const total = level.missions.length + 1;
   return (s.missionsDone.length + (s.bossPassed ? 1 : 0)) / total;
 }

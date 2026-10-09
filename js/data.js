@@ -142,6 +142,40 @@ export const DEMO_LEVEL = {
     { id: 'c', text: 'Estimate the cost of equity using CAPM and the bond-yield-plus-risk-premium approach' },
     { id: 'd', text: 'Estimate the cost of preferred stock' },
   ],
+  map: {
+    bigPicture: 'Every source of money has a price. WACC blends those prices into one hurdle rate that projects must beat.',
+    why: 'Too low a hurdle accepts value-destroying projects; too high rejects good ones.',
+    links: ['Cost of debt + cost of preferred + cost of equity → weighted → WACC', 'WACC = hurdle rate only for average-risk projects'],
+    sections: [
+      { id: 's1', title: 'What WACC is', gist: 'A weighted blend of what every capital provider requires.', keywords: ['hurdle rate', 'target weights', 'market values'], losIds: ['a'],
+        blocks: [
+          { type: 'formula', formula: 'WACC = wd × rd × (1 − t) + wp × rp + we × re', vars: [{ sym: 'wd, wp, we', means: 'weights of debt, preferred, equity (sum to 1)' }, { sym: 'rd', means: 'before-tax cost of debt' }, { sym: 't', means: 'marginal tax rate' }, { sym: 'rp', means: 'cost of preferred stock' }, { sym: 're', means: 'cost of common equity' }], note: 'Only debt gets the (1 − t) adjustment.' },
+          { type: 'compare', title: 'Which weights?', columns: ['', 'Use', 'Avoid'], rows: [['Best', 'Target capital structure', 'Book values'], ['If target unknown', 'Current market values', 'Equal weights']] },
+          { type: 'points', items: ['WACC = minimum return for projects of **average company risk**', 'Riskier project → needs a **higher** rate than WACC'] },
+          { type: 'trap', text: 'Book values are on the balance sheet, but the exam wants target or market-value weights.' },
+        ] },
+      { id: 's2', title: 'Cost of debt and the tax shield', gist: 'Interest is tax-deductible, so debt costs less after tax.', keywords: ['YTM approach', 'debt-rating approach', 'rd × (1 − t)'], losIds: ['b'],
+        blocks: [
+          { type: 'formula', formula: 'After-tax cost of debt = rd × (1 − t)', vars: [{ sym: 'rd', means: 'current YTM on long-term debt' }, { sym: 't', means: 'marginal tax rate' }] },
+          { type: 'group', title: 'Two ways to estimate rd', items: [{ label: 'YTM approach', note: 'Yield investors demand today on existing debt' }, { label: 'Debt-rating approach', note: 'No traded debt? Use yields on same-rated, similar-maturity bonds' }] },
+          { type: 'trap', text: 'Coupon rate ≠ cost of debt. Coupon reflects conditions when the bond was issued.' },
+          { type: 'example', text: 'YTM 6%, tax 25% → 6% × 0.75 = 4.5% after tax.' },
+        ] },
+      { id: 's3', title: 'Cost of equity', gist: 'No stated rate — estimate it from risk.', keywords: ['CAPM', 'beta', 'bond yield + premium'], losIds: ['c'],
+        blocks: [
+          { type: 'formula', formula: 're = rf + β × (E(Rm) − rf)', vars: [{ sym: 'rf', means: 'risk-free rate' }, { sym: 'β', means: 'sensitivity to market moves' }, { sym: 'E(Rm) − rf', means: 'equity risk premium' }], note: 'CAPM' },
+          { type: 'formula', formula: 're = own long-term bond YTM + risk premium', vars: [{ sym: 'risk premium', means: 'judgement estimate, typically a few %' }], note: 'Bond yield plus risk premium' },
+          { type: 'flow', title: 'Why equity costs more', steps: ['Shareholders paid last', 'More risk', 'Higher required return'] },
+          { type: 'trap', text: 'Given E(Rm)? Subtract rf first. Given the premium? Use it directly.' },
+        ] },
+      { id: 's4', title: 'Cost of preferred stock', gist: 'Fixed dividend ÷ price. No tax adjustment.', keywords: ['Dp / Pp', 'no tax shield'], losIds: ['d'],
+        blocks: [
+          { type: 'formula', formula: 'rp = Dp / Pp', vars: [{ sym: 'Dp', means: 'fixed preferred dividend' }, { sym: 'Pp', means: 'current preferred price' }] },
+          { type: 'points', items: ['Preferred dividends are **not** tax-deductible → no (1 − t)'] },
+          { type: 'example', text: '$5 dividend, $62.50 price → 8%.' },
+        ] },
+    ],
+  },
   briefing: {
     headline: 'The board wants a number by Friday',
     story: '{{company}} is weighing a new facility that would double capacity. {{ceo}} is sure it will pay off. {{chair}} is not convinced: "Every project looks good until you charge it for the money it uses. What does our capital actually cost us?"\n\nYou have just been hired as CFO. Your first job is to work out the minimum return any new project must earn — the **hurdle rate** — before the board will approve a single dollar.',
