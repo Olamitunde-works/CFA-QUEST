@@ -637,6 +637,7 @@ function showPlan(r) {
 
 // ---------------- ADD READING ----------------
 let pendingFiles = [];
+let notesCache = { key: '', notes: '' }; // screenshots already read, reused if a build is retried
 function viewAdd(_, params) {
   const topicId = params.topic || '';
   app.innerHTML = `
@@ -698,7 +699,10 @@ function viewAdd(_, params) {
       const tid = $('#topic').value, modVal = $('#mod').value;
       const mi = modVal === 'other' ? null : Number(modVal);
       const title = mi == null ? $('#title').value.trim() : MODULES[tid][mi];
-      const { level, report } = await generateLevel({ files: pendingFiles, topicId: tid, title, onLog: log, signal: ctrl.signal });
+      const fileKey = pendingFiles.map((f) => `${f.name}:${f.size}`).join('|');
+      const cached = notesCache.key === fileKey ? notesCache.notes : null;
+      const { level, report } = await generateLevel({ files: pendingFiles, topicId: tid, title, onLog: log, signal: ctrl.signal, notes: cached, onNotes: (n) => { notesCache = { key: fileKey, notes: n }; } });
+      notesCache = { key: '', notes: '' };
       if (mi != null) { level.moduleIdx = mi; level.title = title; }
       state.levels[level.id] = level;
       await save('levels');
@@ -711,7 +715,7 @@ function viewAdd(_, params) {
         ${report.issues.length ? `<div class="alert warn" style="margin-top:12px"><b>Heads-up:</b><ul style="margin:6px 0 0;padding-left:18px">${report.issues.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : '<div class="alert ok" style="margin-top:12px">Every LOS is covered by a mission and the boss fight.</div>'}
         <div class="row" style="margin-top:14px"><a class="btn primary" href="#/level/${level.id}">Play it →</a></div></div>`;
     } catch (e) {
-      out.innerHTML = `<div class="alert err" style="margin-top:16px"><b>Couldn't build the level.</b> ${esc(e.name === 'AbortError' ? 'Cancelled.' : e.message)}</div>`;
+      out.innerHTML = `<div class="alert err" style="margin-top:16px"><b>Couldn't build the level.</b> ${esc(e.name === 'AbortError' ? 'Cancelled.' : e.message)}${notesCache.notes ? '<br><small>Your screenshots are already read — press <b>Build level</b> again and it will skip straight to building (faster and cheaper).</small>' : ''}</div>`;
       $('#gen').disabled = false;
     } finally { removeEventListener('beforeunload', warn); }
   };

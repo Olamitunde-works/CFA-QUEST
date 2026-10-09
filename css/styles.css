@@ -300,8 +300,8 @@ details.topic-mods summary i { width: 12px; height: 12px; border-radius: 4px; }
 .spinner { width: 18px; height: 18px; border: 2px solid var(--line); border-top-color: var(--lime); border-radius: 50%; animation: spin .8s linear infinite; display: inline-block; vertical-align: middle; }
 
 /* coach */
-.coach-fab { position: fixed; right: 20px; bottom: 90px; z-index: 30; display: flex; align-items: center; gap: 8px; border: 0; cursor: pointer; padding: 12px 18px; border-radius: 99px; background: linear-gradient(135deg, var(--sage), #4f7263); color: #fff; font-weight: 600; box-shadow: var(--shadow); animation: bob 4s ease-in-out infinite; }
-.coach { position: fixed; right: 20px; bottom: 90px; z-index: 40; width: min(420px, calc(100vw - 32px)); height: min(620px, calc(100vh - 100px)); display: flex; flex-direction: column; background: var(--bg2); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow); overflow: hidden; animation: pop .2s ease; }
+.coach-fab { position: fixed; right: 20px; bottom: 20px; z-index: 30; display: flex; align-items: center; gap: 8px; border: 0; cursor: pointer; padding: 12px 18px; border-radius: 99px; background: linear-gradient(135deg, var(--sage), #4f7263); color: #fff; font-weight: 600; box-shadow: var(--shadow); animation: bob 4s ease-in-out infinite; }
+.coach { position: fixed; right: 20px; bottom: 20px; z-index: 40; width: min(420px, calc(100vw - 32px)); height: min(620px, calc(100vh - 100px)); display: flex; flex-direction: column; background: var(--bg2); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow); overflow: hidden; animation: pop .2s ease; }
 .coach[hidden] { display: none; }
 .coach-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--line); background: var(--card2); }
 .coach-head small { display: block; font-size: 12px; }

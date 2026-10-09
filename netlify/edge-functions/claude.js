@@ -6,7 +6,7 @@
 //   ACCESS_CODE        optional  if set, users must enter this code in the app
 //   CLAUDE_MODEL       optional  defaults to claude-sonnet-5-5
 
-const MAX_TOKENS_CAP = 12000;
+const MAX_TOKENS_CAP = 32000;
 const MAX_BODY_BYTES = 12 * 1024 * 1024;
 
 const json = (obj, status) =>

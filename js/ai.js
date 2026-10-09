@@ -59,15 +59,33 @@ function parseJSON(text) {
   return JSON.parse(text.slice(s, e + 1));
 }
 
-async function callJSON(opts, attempts = 2) {
+const TOKEN_CEILING = 32000;
+async function callJSON(opts, stage = 'a step') {
+  let maxTokens = opts.maxTokens || 8000;
   let lastErr;
-  for (let a = 0; a < attempts; a++) {
-    const { text, stop } = await callClaude(opts);
+  for (let a = 0; a < 3; a++) {
+    const { text, stop } = await callClaude({ ...opts, maxTokens });
     try { return parseJSON(text); } catch (e) {
-      lastErr = new Error(stop === 'max_tokens' ? 'AI response was cut off (too long).' : 'AI returned malformed JSON.');
+      if (stop === 'max_tokens' && maxTokens < TOKEN_CEILING) {
+        maxTokens = Math.min(maxTokens * 2, TOKEN_CEILING); // give it more room and retry
+        lastErr = new Error(`AI response for ${stage} was cut off, even at the maximum length.`);
+      } else {
+        lastErr = new Error(`AI returned malformed JSON for ${stage}.`);
+      }
     }
   }
   throw lastErr;
+}
+
+// Plain-text call that keeps going if the output is cut off.
+async function callText(opts, maxRounds = 3) {
+  let { text, stop } = await callClaude(opts);
+  let rounds = 1;
+  while (stop === 'max_tokens' && rounds < maxRounds) {
+    const more = await callClaude({ ...opts, messages: [...opts.messages, { role: 'assistant', content: text }, { role: 'user', content: 'Continue exactly where you stopped. Do not repeat anything.' }] });
+    text += more.text; stop = more.stop; rounds++;
+  }
+  return text;
 }
 
 // ---------- prompts ----------
@@ -110,64 +128,80 @@ CALC: {"id":"q2","type":"calc","losId":"b","prompt":"text with {varName} placeho
 Rules for CALC: percentages are stored as decimals with "unit":"%" (0.06 = 6%). Plain numbers use "unit":"" (or "$"). Expressions may use + - * / ^ ( ) and sqrt ln log exp abs min max pow. Each step's id can be used by later steps. min/max/step define safe random ranges that keep the problem sensible (for example keep a growth rate below the required return). Break multi-step problems into the same steps a candidate would do. For TVM problems that need a calculator solve (e.g. solving for YTM/IRR), put the known answer as a step expression only if it can be written in closed form; otherwise use an MCQ.`;
 
 // ---------- pipeline ----------
-export async function generateLevel({ files, topicId, title, onLog, signal }) {
+export async function generateLevel({ files, topicId, title, onLog, signal, notes: cachedNotes, onNotes }) {
   const log = (m) => onLog?.(m);
   const topic = topicById(topicId);
 
-  // Stage 1: extract notes in batches of 4 pages.
-  const batches = [];
-  for (let i = 0; i < files.length; i += 4) batches.push(files.slice(i, i + 4));
-  let notes = '';
-  for (let b = 0; b < batches.length; b++) {
-    log(`Reading pages ${b * 4 + 1}–${b * 4 + batches[b].length} of ${files.length}…`);
-    const imgs = [];
-    for (const f of batches[b]) imgs.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: await fileToJpegBase64(f) } });
-    const { text } = await callClaude({
-      system: EXTRACT_SYSTEM, maxTokens: 6000, signal,
-      messages: [{ role: 'user', content: [...imgs, { type: 'text', text: `Topic: ${topic.name}. These are pages ${b * 4 + 1}-${b * 4 + batches[b].length} of the reading${title ? ` "${title}"` : ''}. Notes so far end with:\n${notes.slice(-800) || '(start of reading)'}\n\nExtract the notes for these pages.` }] }],
-    });
-    notes += `\n\n<!-- pages ${b * 4 + 1}-${b * 4 + batches[b].length} -->\n${text}`;
-  }
+  // Stage 1: extract notes, 3 pages at a time (skipped if we already read these screenshots).
+  let notes = cachedNotes || '';
+  if (!notes) {
+    const per = 3;
+    for (let i = 0; i < files.length; i += per) {
+      const batch = files.slice(i, i + per);
+      log(`Reading pages ${i + 1}–${i + batch.length} of ${files.length}…`);
+      const imgs = [];
+      for (const f of batch) imgs.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: await fileToJpegBase64(f) } });
+      const text = await callText({
+        system: EXTRACT_SYSTEM, maxTokens: 12000, signal,
+        messages: [{ role: 'user', content: [...imgs, { type: 'text', text: `Topic: ${topic.name}. These are pages ${i + 1}-${i + batch.length} of the reading${title ? ` "${title}"` : ''}. Notes so far end with:\n${notes.slice(-800) || '(start of reading)'}\n\nExtract the notes for these pages.` }] }],
+      });
+      notes += `\n\n<!-- pages ${i + 1}-${i + batch.length} -->\n${text}`;
+    }
+    onNotes?.(notes);
+  } else log('Using the screenshots already read — skipping straight to building.');
 
-  // Stage 2: plan the level.
-  log('Designing the level: briefing, LOS map, field manual…');
+  // Stage 2a: plan the level.
+  log('Designing the level: briefing and LOS map…');
   const plan = await callJSON({
-    system: plannerSystem(), maxTokens: 8000, signal,
+    system: plannerSystem(), maxTokens: 10000, signal,
     messages: [{ role: 'user', content: `Topic: ${topic.name}\nPrevious story beats:\n${priorBeats(topicId)}\n\nSTUDY NOTES:\n${notes}\n\nReturn ONLY JSON:
 {"title":"reading title","module":"Learning Module number/name if shown","storyBeat":"one sentence summarising what happens in this chapter of the story",
 "los":[{"id":"a","text":"LOS text"}],
 "briefing":{"headline":"short hook","story":"2-3 short paragraphs setting the scene in the company world, ending with the problem the learner must solve","stakes":"one sentence"},
-"missionsOutline":[{"id":"m1","title":"catchy title","losIds":["a"],"focus":"exactly which concepts, formulas and details from the notes this mission must cover"}],
-"fieldManual":[{"term":"","definition":"precise exam-ready definition","formula":"optional","trap":"optional"}]}
-Rules: if no LOS appear in the notes, derive them from the content and prefix each with "(derived)". Every LOS must appear in at least one mission. Use 3-8 missions, each sized for ~5-8 minutes. The union of all mission "focus" fields must cover every concept in the notes. Field manual: every defined term and every formula in the notes.` }],
-  });
+"missionsOutline":[{"id":"m1","title":"catchy title","losIds":["a"],"focus":"exactly which concepts, formulas and details from the notes this mission must cover"}]}
+Rules: if no LOS appear in the notes, derive them from the content and prefix each with "(derived)". Every LOS must appear in at least one mission. Use 3-8 missions, each sized for ~5-8 minutes. The union of all mission "focus" fields must cover every concept in the notes.` }],
+  }, 'the level plan');
 
-  // Stage 3: build missions in pairs.
+  // Stage 2b: field manual.
+  log('Writing the field manual…');
+  const fm = await callJSON({
+    system: plannerSystem(), maxTokens: 12000, signal,
+    messages: [{ role: 'user', content: `STUDY NOTES:\n${notes}\n\nReturn ONLY JSON: {"fieldManual":[{"term":"","definition":"precise exam-ready definition (1-3 sentences)","formula":"optional","trap":"optional exam trap"}]}\nInclude every defined term and every formula in the notes.` }],
+  }, 'the field manual');
+
+  // Stage 3: build missions one at a time.
   const missions = [];
   const outline = plan.missionsOutline || [];
-  for (let i = 0; i < outline.length; i += 2) {
-    const group = outline.slice(i, i + 2);
-    log(`Building missions ${i + 1}–${i + group.length} of ${outline.length}…`);
+  for (let i = 0; i < outline.length; i++) {
+    log(`Building mission ${i + 1} of ${outline.length}: ${outline[i].title}…`);
     const out = await callJSON({
-      system: plannerSystem(), maxTokens: 9000, signal,
-      messages: [{ role: 'user', content: `Level: ${plan.title} (${topic.name})\nBriefing: ${plan.briefing?.story}\n\nSTUDY NOTES:\n${notes}\n\nBuild these missions in full:\n${JSON.stringify(group)}\n\n${Q_SCHEMA}\n\nReturn ONLY JSON: {"missions":[{"id":"m1","title":"","losIds":["a"],"scene":"a short vivid scene (2-4 sentences) in the story world that creates the need for this concept","concept":"the COMPLETE precise explanation of everything in this mission's focus, in markdown. Use **bold** for key terms, '- ' bullets for lists, and fenced blocks starting with \`\`\`formula for formulas, followed by what each variable means. Tie it back to the scene where helpful but never let the story replace the detail.","keyPoints":["3-6 exam-ready takeaways"],"check":QUESTION}]}
+      system: plannerSystem(), maxTokens: 12000, signal,
+      messages: [{ role: 'user', content: `Level: ${plan.title} (${topic.name})\nBriefing: ${plan.briefing?.story}\n\nSTUDY NOTES:\n${notes}\n\nBuild this mission in full:\n${JSON.stringify(outline[i])}\n\n${Q_SCHEMA}\n\nReturn ONLY JSON: {"mission":{"id":"${outline[i].id}","title":"","losIds":["a"],"scene":"a short vivid scene (2-4 sentences) in the story world that creates the need for this concept","concept":"the COMPLETE precise explanation of everything in this mission's focus, in markdown. Use **bold** for key terms, '- ' bullets for lists, and fenced blocks starting with \`\`\`formula for formulas, followed by what each variable means. Tie it back to the scene where helpful but never let the story replace the detail.","keyPoints":["3-6 exam-ready takeaways"],"check":QUESTION}}
 The "check" is a decision point in the scene: use a CALC if the mission involves a formula, otherwise an MCQ that tests application, not recall.` }],
-    });
-    missions.push(...(out.missions || []));
+    }, `mission ${i + 1}`);
+    if (out.mission) missions.push({ ...out.mission, id: outline[i].id || out.mission.id, losIds: [...new Set([...(outline[i].losIds || []), ...(out.mission.losIds || [])])] });
+    else if (Array.isArray(out.missions)) missions.push(...out.missions);
   }
 
-  // Stage 4: boss fight.
-  log('Summoning the boss fight…');
-  const bossOut = await callJSON({
-    system: plannerSystem(), maxTokens: 10000, signal,
-    messages: [{ role: 'user', content: `Level: ${plan.title} (${topic.name})\nLOS: ${JSON.stringify(plan.los)}\n\nSTUDY NOTES:\n${notes}\n\n${Q_SCHEMA}\n\nWrite a boss fight of 8-12 CFA Level I exam-style questions set in the story world. Cover EVERY LOS at least once. Include a CALC for every formula-based LOS. Include the classic exam traps. Vary difficulty. Return ONLY JSON: {"boss":[QUESTION, ...]}` }],
-  });
+  // Stage 4: boss fight, in two rounds so neither gets too long.
+  const los = plan.los || [];
+  const half = Math.ceil(los.length / 2) || 1;
+  const rounds = los.length > 3 ? [los.slice(0, half), los.slice(half)] : [los];
+  const boss = [];
+  for (let r = 0; r < rounds.length; r++) {
+    log(`Summoning the boss fight (${r + 1}/${rounds.length})…`);
+    const out = await callJSON({
+      system: plannerSystem(), maxTokens: 12000, signal,
+      messages: [{ role: 'user', content: `Level: ${plan.title} (${topic.name})\nLOS to test in this round: ${JSON.stringify(rounds[r])}\n\nSTUDY NOTES:\n${notes}\n\n${Q_SCHEMA}\n\nWrite ${rounds.length > 1 ? '4-6' : '8-10'} CFA Level I exam-style questions set in the story world. Cover EVERY LOS listed here at least once. Include a CALC for every formula-based LOS. Include the classic exam traps. Keep explanations tight (2-4 sentences). Return ONLY JSON: {"boss":[QUESTION, ...]}` }],
+    }, 'the boss fight');
+    boss.push(...(out.boss || []));
+  }
 
   const level = {
     id: `lvl-${Date.now().toString(36)}`, topicId, source: 'ai', createdAt: new Date().toISOString(),
     title: plan.title || title || 'Untitled reading', module: plan.module || '', storyBeat: plan.storyBeat || '',
-    los: plan.los || [], briefing: plan.briefing || { headline: plan.title, story: '', stakes: '' },
-    missions, fieldManual: plan.fieldManual || [], boss: bossOut.boss || [], notes,
+    los, briefing: plan.briefing || { headline: plan.title, story: '', stakes: '' },
+    missions, fieldManual: fm.fieldManual || [], boss, notes,
   };
   log('Checking calculations and LOS coverage…');
   const report = sanitizeLevel(level);
