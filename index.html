@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>CFA Quest</title>
+  <meta name="description" content="Turn the CFA Level I curriculum into story-driven missions, boss fights and a review queue." />
+  <meta name="theme-color" content="#13213a" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%2323395B'/><path d='M18 44 32 14l14 30' stroke='%23CCF5AC' stroke-width='6' fill='none' stroke-linecap='round' stroke-linejoin='round'/><circle cx='32' cy='38' r='4' fill='%23C29979'/></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <div class="bg-anim" aria-hidden="true">
+    <div class="grid-lines"></div>
+    <div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div><div class="blob b4"></div>
+    <canvas id="glyphs"></canvas>
+  </div>
+  <header class="topbar">
+    <a class="brand" href="#/"><span class="brand-mark">▲</span> CFA&nbsp;Quest</a>
+    <div class="hud" id="hud"></div>
+    <nav class="nav" id="nav">
+      <a href="#/" data-nav="home">Map</a>
+      <a href="#/review" data-nav="review">Review <span class="pill" id="dueBadge"></span></a>
+      <a href="#/plan" data-nav="plan">Plan</a>
+      <a href="#/add" data-nav="add">+ Reading</a>
+      <a href="#/settings" data-nav="settings" aria-label="Settings">⚙</a>
+    </nav>
+  </header>
+
+  <main id="app" tabindex="-1"></main>
+
+  <div class="focus" id="focus" hidden>
+    <button class="focus-time" id="focusTime" title="Focus timer">25:00</button>
+    <button class="focus-x" id="focusClose" aria-label="Stop timer">×</button>
+  </div>
+
+  <button class="coach-fab" id="coachFab" aria-label="Ask Coach">💬 <span>Ask Coach</span></button>
+  <aside class="coach" id="coach" aria-label="Coach chat" hidden>
+    <div class="coach-head">
+      <div><strong>Coach</strong><small id="coachCtx">General questions</small></div>
+      <button class="icon-btn" id="coachClose" aria-label="Close">×</button>
+    </div>
+    <div class="coach-log" id="coachLog"></div>
+    <form class="coach-form" id="coachForm">
+      <textarea id="coachInput" rows="2" placeholder="Ask anything you didn't get…"></textarea>
+      <button class="btn primary" type="submit">Send</button>
+    </form>
+  </aside>
+
+  <div class="toasts" id="toasts"></div>
+  <div class="modal-wrap" id="modal" hidden></div>
+  <canvas id="confetti" aria-hidden="true"></canvas>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
